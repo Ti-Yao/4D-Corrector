@@ -3,3 +3,4 @@ compare_4*
 results/*
 preprocessing
 *ipynb
+__pycache__

@@ -17,7 +17,8 @@
 	// Enable plotting.
 	"mounts": [
 		"type=bind,source=/tmp/.X11-unix,target=/tmp/.X11-unix",
-		"type=bind,source=/media/aviary-nas/tina/data/4D/test_4d,target=/workspaces/4D/major_revision_plot/data/test_4d"
+		"type=bind,source=/media/aviary-nas/tina/data/Force-ML/major_revisions,target=/workspaces/4D-Corrector/data/major_revision",
+		"type=bind,source=/media/aviary-nas/tina/pipelines/4D_Pipeline/models,target=/workspaces/4D-Corrector/models"
 
 	],
 	// Enable plotting.

@@ -10,7 +10,11 @@ import matplotlib.gridspec as gridspec
 from tqdm import tqdm
 import time
 from PIL import Image, ImageDraw, ImageFont
-
+import pandas as pd
+from skimage import exposure
+from rasterio import features, Affine
+from skimage.measure import label 
+from shapely.geometry import Polygon, box, Point, shape, MultiPolygon
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
@@ -135,9 +139,14 @@ def make_video(true_image, true_mask, pred_image, pred_mask, save_path):
         return np.stack([img]*3, axis=-1)
 
     def overlay_mask(base, mask, color):
-        alpha = mask[..., None] * 0.3
-        color = np.array(color)
-        return (base + color*alpha).astype(np.uint8)
+        base = base.astype(np.float32)
+        mask = (mask > 0).astype(np.float32)[..., None]
+        color = np.array(color, dtype=np.float32)
+
+        alpha = 0.3
+        blended = base * (1 - alpha * mask) + color * (alpha * mask)
+
+        return np.clip(blended, 0, 255).astype(np.uint8)
 
     for t in range(timesteps):
 
@@ -189,3 +198,55 @@ def make_video(true_image, true_mask, pred_image, pred_mask, save_path):
         duration=int(1000/timesteps),
         loop=0
     )
+
+def mask_to_polygons_layer(mask):
+    '''
+    convert mask to polygons
+    '''
+    all_polygons = []
+    for poly, value in features.shapes(mask.astype(np.int16), mask=(mask >0), transform= Affine(1.0, 0, 0, 0, 1.0, 0)):
+        all_polygons.append(shape(poly))
+
+    all_polygons = MultiPolygon(all_polygons)
+    if not all_polygons.is_valid:
+        all_polygons = all_polygons.buffer(0)
+        if all_polygons.geom_type == 'Polygon':
+            all_polygons = MultiPolygon([all_polygons])
+    return all_polygons
+
+def remove_unconnected_segmentations(masks):
+    '''
+    postprocessing step, clean up any segmentations outside the heart (the main connected layer)
+    '''
+    
+    keep_seg_masks = []
+    mid_slice_idx = round(masks.shape[2]/2)
+    for channel in range(1,3):
+        keep_seg_masks_time = []
+        for time in range(masks.shape[3]):
+            heart_mask = np.sum(np.sum(np.sum(masks[...,time,-2:],-1),0),0)
+            max_heart_idx = np.argmax(heart_mask)
+            y_sum = np.sum(masks[...,max_heart_idx,time,1:],-1)
+            sum_polygon = mask_to_polygons_layer(y_sum)
+            keep_seg_masks_slice = []
+            for pos in range(masks.shape[2]):
+                pred_polygons = mask_to_polygons_layer(masks[...,pos,time,channel])
+                keep_pred_polygons = []
+                for pred_poly in list(pred_polygons.geoms):
+                    current_poly = pred_poly
+                    criteria = current_poly.intersects(sum_polygon) 
+                    if criteria :
+                        keep_pred_polygons.append(pred_poly)
+                if len(keep_pred_polygons) > 0:
+                    keep_seg_masks_slice.append(features.rasterize(keep_pred_polygons, out_shape=y_sum.shape))
+                else:
+                    keep_seg_masks_slice.append(np.zeros_like(masks[...,pos,time,channel]))
+            keep_seg_masks_slice = np.stack(keep_seg_masks_slice,-1)
+            keep_seg_masks_time.append(keep_seg_masks_slice)
+        keep_seg_masks_time = np.stack(keep_seg_masks_time,-1)
+        keep_seg_masks.append(keep_seg_masks_time)
+
+    keep_seg_masks = np.stack(keep_seg_masks,-1)
+    bkg_mask_array = np.ones(keep_seg_masks.shape[:4]) - np.sum(keep_seg_masks[...,1:], axis = -1)
+    masks = np.concatenate([bkg_mask_array[...,np.newaxis],keep_seg_masks], axis = -1)
+    return masks

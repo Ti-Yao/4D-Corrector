@@ -22,9 +22,11 @@ RUN pip install pylibjpeg-openjpeg==1.3.2
 RUN pip install scipy==1.9.0
 RUN pip install tensorflow==2.9.1
 RUN pip install tqdm==4.64.0
+RUN pip install Shapely==1.8.1.post1
 RUN pip install opencv-python-headless==4.7.0.68
 RUN pip install ipykernel
-
+RUN pip install scikit-image
+RUN pip install rasterio==1.3.11 
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fonts-dejavu-core && \
