@@ -8,30 +8,13 @@ patients = [pat.split('/')[-1].replace('.nii.gz','').replace('image___','') for 
 # load model
 model_name = 'SEG4D-112'
 segger_path = f'models/{model_name}.h5'
-segger = build_unet3plus_4D(input_shape=(32, None, 128, 128, 1), num_classes=3)
-segger.load_weights(segger_path) 
+segger = tf.keras.models.load_model(segger_path, compile = False, custom_objects={'Conv4D':Conv4D, 
+                                                                                  'MaxPool4D':MaxPool4D, 
+                                                                                  'ResizeAndConcatenate':ResizeAndConcatenate, 
+                                                                                  'UpSampling4D':UpSampling4D, 
+                                                                                  'HeNormal':HeNormal, 'Zeros':Zeros})
 
-def calculate_sax_metrics(mask_4d, voxel_size):
-    mask_4d = get_one_hot(mask_4d.astype('uint8'), 3)
-    
-    myo_index = 1 # fixed
-    endo_index = 2 # fixed
-
-    masses = np.sum(mask_4d[...,myo_index], axis = (0,1,2)) * voxel_size
-    volume = np.sum(mask_4d[...,endo_index], axis = (0,1,2)) * voxel_size  * 1.05
-
-    dia_idx = np.argmax(volume)
-    sys_idx = np.argmin(volume)
-    mass = masses[dia_idx]
-    edv = volume[dia_idx]
-    esv = volume[sys_idx]
-    sv = edv - esv
-    ef = (sv) * 100/edv
-
-    return volume, mass, esv, edv, sv, ef
-
-
-for patient in tqdm(patients[:1]): # loop through cases
+for patient in tqdm(patients[:]): # loop through cases
     image = load_nii(f'{data_path}/image___{patient}.nii.gz') # load image
     mask_2d = load_nii(f'{data_path}/masks___{patient}.nii.gz') # load mask
     sax_df = pd.read_csv(f'{data_path}/saxdf___{patient}.csv')

@@ -203,6 +203,27 @@ def make_video(true_image, true_mask, pred_image, pred_mask, save_path):
         loop=0
     )
 
+
+def calculate_sax_metrics(mask_4d, voxel_size):
+    mask_4d = get_one_hot(mask_4d.astype('uint8'), 3)
+    
+    myo_index = 1 # fixed
+    endo_index = 2 # fixed
+
+    masses = np.sum(mask_4d[...,myo_index], axis = (0,1,2)) * voxel_size
+    volume = np.sum(mask_4d[...,endo_index], axis = (0,1,2)) * voxel_size  * 1.05
+
+    dia_idx = np.argmax(volume)
+    sys_idx = np.argmin(volume)
+    mass = masses[dia_idx]
+    edv = volume[dia_idx]
+    esv = volume[sys_idx]
+    sv = edv - esv
+    ef = (sv) * 100/edv
+
+    return volume, mass, esv, edv, sv, ef
+
+
 def getLargestCC(segmentation):
     labels = label(segmentation)
     assert( labels.max() != 0 ) # assume at least 1 CC
