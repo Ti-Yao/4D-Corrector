@@ -1,6 +1,3 @@
-# See here for image contents: https://github.com/microsoft/vscode-dev-containers/tree/v0.245.0/containers/python-3/.devcontainer/base.Dockerfile
- 
-# [Choice] Python version (use -bullseye variants on local arm64/Apple Silicon): 3, 3.10, 3.9, 3.8, 3.7, 3.6, 3-bullseye, 3.10-bullseye, 3.9-bullseye, 3.8-bullseye, 3.7-bullseye, 3.6-bullseye, 3-buster, 3.10-buster, 3.9-buster, 3.8-buster, 3.7-buster, 3.6-buster
 FROM tensorflow/tensorflow:2.9.1-gpu
 RUN apt-get install libopenexr-dev -y
 RUN pip install keras==2.9.0
@@ -22,11 +19,9 @@ RUN pip install pylibjpeg-openjpeg==1.3.2
 RUN pip install scipy==1.9.0
 RUN pip install tensorflow==2.9.1
 RUN pip install tqdm==4.64.0
-RUN pip install Shapely==1.8.1.post1
 RUN pip install opencv-python-headless==4.7.0.68
 RUN pip install ipykernel
 RUN pip install scikit-image
-RUN pip install rasterio==1.3.11 
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fonts-dejavu-core && \

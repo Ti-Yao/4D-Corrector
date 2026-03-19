@@ -1,11 +1,9 @@
 from utils import *
 
-
 ############ load major revisions #########
 data_path = './data/major_revision/nifti'
 patients = [pat.split('/')[-1].replace('.nii.gz','').replace('image___','') for pat in glob.glob(f'{data_path}/*') if 'image___' in pat    ]
 ##########################################
-
 
 # load model
 model_name = 'SEG4D-112'
@@ -13,7 +11,27 @@ segger_path = f'models/{model_name}.h5'
 segger = build_unet3plus_4D(input_shape=(32, None, 128, 128, 1), num_classes=3)
 segger.load_weights(segger_path) 
 
-for patient in tqdm(patients[:]): # loop through cases
+def calculate_sax_metrics(mask_4d, voxel_size):
+    mask_4d = get_one_hot(mask_4d.astype('uint8'), 3)
+    
+    myo_index = 1 # fixed
+    endo_index = 2 # fixed
+
+    masses = np.sum(mask_4d[...,myo_index], axis = (0,1,2)) * voxel_size
+    volume = np.sum(mask_4d[...,endo_index], axis = (0,1,2)) * voxel_size  * 1.05
+
+    dia_idx = np.argmax(volume)
+    sys_idx = np.argmin(volume)
+    mass = masses[dia_idx]
+    edv = volume[dia_idx]
+    esv = volume[sys_idx]
+    sv = edv - esv
+    ef = (sv) * 100/edv
+
+    return volume, mass, esv, edv, sv, ef
+
+
+for patient in tqdm(patients[:1]): # loop through cases
     image = load_nii(f'{data_path}/image___{patient}.nii.gz') # load image
     mask_2d = load_nii(f'{data_path}/masks___{patient}.nii.gz') # load mask
     sax_df = pd.read_csv(f'{data_path}/saxdf___{patient}.csv')
@@ -35,28 +53,37 @@ for patient in tqdm(patients[:]): # loop through cases
 
     if flip:
         image_to_seg = image_to_seg[:,:,::-1,:] # orient basal to apical
-
+    
     image_to_seg = np.transpose(image_to_seg, (3, 2, 0, 1)) 
     image_to_seg = clip_outliers(image_to_seg, lower_percentile=1, upper_percentile=99)
     image_to_seg = standardize(image_to_seg)
 
     cropped_mask_4d = segger.predict(image_to_seg[np.newaxis, ...,np.newaxis])[-1][0] # predict the masks
-    cropped_mask_4d = get_one_hot(np.argmax(cropped_mask_4d,axis = -1), 3) # binarise each mask
     cropped_mask_4d = transpose_channels(cropped_mask_4d, ['T','D','H','W','C'], ['H','W','D','T','C'])
-    cropped_mask_4d = remove_unconnected_segmentations(cropped_mask_4d)
+    cropped_mask_4d = np.argmax(cropped_mask_4d,axis = -1)
+    cropped_mask_4d = postprocess(cropped_mask_4d)
 
     if flip:
-        cropped_mask_4d = cropped_mask_4d[:,:,::-1,:,:] # reorient
+        cropped_mask_4d = cropped_mask_4d[:,:,::-1,:] # reorient
 
-    cropped_mask_4d = zoom(cropped_mask_4d, (1/image_zoom, 1/image_zoom, 1, 1/time_zoom, 1), order=0) # size 4d mask back to cropped size
+    cropped_mask_4d = zoom(cropped_mask_4d, (1/image_zoom, 1/image_zoom, 1, 1/time_zoom), order=0) # size 4d mask back to cropped size
     
     cropped_image = clip_outliers(cropped_image, lower_percentile=0.1, upper_percentile=99.9) # improve gif visibility
     make_video(cropped_image, cropped_mask, cropped_image, cropped_mask_4d, f'results/compare_gifs/{patient}')
 
     # resize to original image size        
     H, W, D, T = image.shape
-    C = cropped_mask_4d.shape[-1]
-    mask_4d = np.zeros((H, W, D, T, C), dtype=cropped_mask_4d.dtype)
-    mask_4d[y_min:y_max, x_min:x_max, :, :, :] = cropped_mask_4d
+    mask_4d = np.zeros((H, W, D, T), dtype = 'uint8')
+    mask_4d[y_min:y_max, x_min:x_max, :, :] = cropped_mask_4d
+    assert len(np.unique(mask_4d)) == 3
     
-    save_mask(np.argmax(mask_4d, -1), save_path=f'results/masks/masks___{patient}_4D.nii.gz')
+    # Save this mask
+    save_mask(mask_4d, save_path=f'results/masks/masks___{patient}_4D.nii.gz')
+
+    # Calculate Metrics
+    pixelspacing = sax_df.pixelspacing[0]
+    thickness = sax_df.thickness[0]
+    voxel_size = pixelspacing ** 2 * thickness / 1000
+
+    # Save Metrics
+    volume, mass, esv, edv, sv, ef = calculate_sax_metrics(mask_4d, voxel_size) 

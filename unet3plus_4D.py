@@ -4,6 +4,7 @@ import numpy as np
 
 from tensorflow.keras import layers, models
 from tensorflow.keras.layers import (Conv1D, Conv3D, MaxPooling1D, MaxPooling3D, UpSampling1D, UpSampling3D, TimeDistributed, Lambda)
+from tensorflow.keras.initializers import HeNormal, Zeros
 
 
 def central_crop(tensor, shape):

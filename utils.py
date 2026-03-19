@@ -12,9 +12,8 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
 from skimage import exposure
-from rasterio import features, Affine
-from skimage.measure import label 
-from shapely.geometry import Polygon, box, Point, shape, MultiPolygon
+from scipy import ndimage
+from skimage.measure import label   
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
@@ -111,6 +110,11 @@ def transpose_channels(image, input_channel_order, target_channel_order):
 def make_video(true_image, true_mask, pred_image, pred_mask, save_path):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
+    if true_mask.shape[-1] !=3 and true_mask.ndim != 5:
+        true_mask = get_one_hot(true_mask.astype('uint8'), 3)
+    if pred_mask.shape[-1] !=3 and pred_mask.ndim != 5:
+        pred_mask = get_one_hot(pred_mask.astype('uint8'), 3)
+
     H, W, position, timesteps = true_image.shape
 
     grid_rows = int(np.sqrt(position) + 0.5)
@@ -199,54 +203,52 @@ def make_video(true_image, true_mask, pred_image, pred_mask, save_path):
         loop=0
     )
 
-def mask_to_polygons_layer(mask):
-    '''
-    convert mask to polygons
-    '''
-    all_polygons = []
-    for poly, value in features.shapes(mask.astype(np.int16), mask=(mask >0), transform= Affine(1.0, 0, 0, 0, 1.0, 0)):
-        all_polygons.append(shape(poly))
+def getLargestCC(segmentation):
+    labels = label(segmentation)
+    assert( labels.max() != 0 ) # assume at least 1 CC
+    largestCC = labels == np.argmax(np.bincount(labels.flat)[1:])+1
+    return largestCC
 
-    all_polygons = MultiPolygon(all_polygons)
-    if not all_polygons.is_valid:
-        all_polygons = all_polygons.buffer(0)
-        if all_polygons.geom_type == 'Polygon':
-            all_polygons = MultiPolygon([all_polygons])
-    return all_polygons
 
-def remove_unconnected_segmentations(masks):
-    '''
-    postprocessing step, clean up any segmentations outside the heart (the main connected layer)
-    '''
-    
-    keep_seg_masks = []
-    mid_slice_idx = round(masks.shape[2]/2)
-    for channel in range(1,3):
-        keep_seg_masks_time = []
-        for time in range(masks.shape[3]):
-            heart_mask = np.sum(np.sum(np.sum(masks[...,time,-2:],-1),0),0)
-            max_heart_idx = np.argmax(heart_mask)
-            y_sum = np.sum(masks[...,max_heart_idx,time,1:],-1)
-            sum_polygon = mask_to_polygons_layer(y_sum)
-            keep_seg_masks_slice = []
-            for pos in range(masks.shape[2]):
-                pred_polygons = mask_to_polygons_layer(masks[...,pos,time,channel])
-                keep_pred_polygons = []
-                for pred_poly in list(pred_polygons.geoms):
-                    current_poly = pred_poly
-                    criteria = current_poly.intersects(sum_polygon) 
-                    if criteria :
-                        keep_pred_polygons.append(pred_poly)
-                if len(keep_pred_polygons) > 0:
-                    keep_seg_masks_slice.append(features.rasterize(keep_pred_polygons, out_shape=y_sum.shape))
-                else:
-                    keep_seg_masks_slice.append(np.zeros_like(masks[...,pos,time,channel]))
-            keep_seg_masks_slice = np.stack(keep_seg_masks_slice,-1)
-            keep_seg_masks_time.append(keep_seg_masks_slice)
-        keep_seg_masks_time = np.stack(keep_seg_masks_time,-1)
-        keep_seg_masks.append(keep_seg_masks_time)
+def postprocess(mask):
+    """
+    mask: (H,W,Z,T) predicted mask for one channel (non-binary)
+    sum_mask: (H,W) reference mask (2D) for max heart area
+    Returns cleaned mask with only values from components intersecting sum_mask
+    """
+    one_hot_mask = get_one_hot(mask.astype(np.uint8), 3) 
+    sum_mask = np.sum(one_hot_mask[...,1:], axis = (-1, 2, 3))
+    sum_mask = sum_mask > (np.quantile(sum_mask, 0.95)).astype(int)
+    sum_mask = getLargestCC(sum_mask)
+    H, W, Z, T = mask.shape
+    keep_mask_time = []
 
-    keep_seg_masks = np.stack(keep_seg_masks,-1)
-    bkg_mask_array = np.ones(keep_seg_masks.shape[:4]) - np.sum(keep_seg_masks[...,1:], axis = -1)
-    masks = np.concatenate([bkg_mask_array[...,np.newaxis],keep_seg_masks], axis = -1)
-    return masks
+    for t in range(T):
+        keep_mask_slice = []
+
+        for z in range(Z):
+            slice_mask = mask[..., z, t]
+
+            # create boolean mask of nonzero values
+            nonzero = slice_mask != 0
+
+            # label connected components on nonzero values
+            labeled, n = ndimage.label(nonzero)
+
+            # find labels that intersect the reference mask
+            touching_labels = np.unique(labeled[sum_mask > 0])
+            if touching_labels.size == 0:
+                keep_mask_slice.append(np.zeros_like(slice_mask))
+                continue
+
+            # keep original values for touching components
+            keep = np.isin(labeled, touching_labels)
+            cleaned_slice = np.where(keep, slice_mask, 0)
+
+            keep_mask_slice.append(cleaned_slice)
+
+        keep_mask_slice = np.stack(keep_mask_slice, axis=-1)
+        keep_mask_time.append(keep_mask_slice)
+
+    keep_mask_time = np.stack(keep_mask_time, axis=-1)
+    return keep_mask_time
